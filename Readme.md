@@ -44,7 +44,8 @@ ingress:
   - service: http_status:404
 ```
 
-Setiap project yang dideploy akan otomatis ditambahkan ke ingress ini oleh `index.php` melalui Cloudflare API — jadi tidak perlu edit manual setiap kali ada project baru.
+Setiap project yang dideploy akan otomatis ditambahkan ke ingress ini oleh `index.php` melalui Cloudflare API — jadi tidak perlu edit manual setiap kali ada project baru &
+Ingress adalah daftar aturan routing yang memberitahu Cloudflare Tunnel ke mana harus meneruskan request yang masuk. Setiap baris berisi hostname (domain yang dituju pengguna) dan service (port lokal tempat aplikasi berjalan di server). Baris terakhir tanpa hostname adalah fallback — request yang tidak cocok dikembalikan 404. Pada platform ini, ingress ditambahkan otomatis oleh index.php via Cloudflare API setiap kali ada project baru dideploy, sehingga tidak perlu edit manual.
 
 ### Cara Akses dan Edit Config
 ```bash
