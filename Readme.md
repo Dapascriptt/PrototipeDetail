@@ -246,15 +246,98 @@ if (file_exists("$target/artisan") && file_exists($composerJsonPath)) {
 ```
 Deteksi dua lapis: cek file `artisan` dulu, konfirmasi dengan baca isi `composer.json`. Jika Laravel, `.env` dibuat otomatis dari `.env.example` dengan konfigurasi database yang sudah diprovisioning termasuk handle baris yang dikomentari dengan `#`.
 
-### Permission 3-Layer
-```
-Layer 1: direktori root project → sshUser:sshUser 755
-Layer 2: semua konten project   → sshUser:www 775/664
-Layer 3: storage/ & cache/      → sshUser:www 775
-         .env                   → sshUser:www 640
-```
-Tiga layer permission memastikan web server (`www`) bisa baca semua file, SSH user bisa tulis semua file, tapi `.env` hanya bisa dibaca oleh SSH user dan web server saja karena berisi password database.
+# Permission 3-Layer
 
+## Dasar: Cara Baca Angka Permission Linux
+
+Setiap angka permission terdiri dari 3 digit. Masing-masing digit mewakili hak akses untuk tiga pihak:
+
+```
+Digit 1 → Owner (pemilik file)
+Digit 2 → Group (kelompok)
+Digit 3 → Others (orang lain)
+```
+
+Setiap digit merupakan penjumlahan dari nilai berikut:
+
+```
+4 = Read    (baca)
+2 = Write   (tulis)
+1 = Execute (jalankan)
+```
+
+Contoh:
+```
+7 = 4+2+1 = Read + Write + Execute
+6 = 4+2   = Read + Write
+5 = 4+1   = Read + Execute
+4 = 4     = Read saja
+0 = 0     = Tidak ada akses sama sekali
+```
+
+---
+
+## Implementasi di Platform Ini
+
+### Layer 1 — Direktori Root Project: `sshUser:sshUser 755`
+```
+Owner  (sshUser) → 7 = Read + Write + Execute
+Group  (sshUser) → 5 = Read + Execute
+Others           → 5 = Read + Execute
+```
+Direktori root project dimiliki oleh SSH user. Semua orang bisa masuk ke direktori ini, tapi hanya SSH user yang bisa mengubah isinya.
+
+---
+
+### Layer 2 — Konten Project: `sshUser:www 775/664`
+
+**Folder (775):**
+```
+Owner (sshUser) → 7 = Read + Write + Execute
+Group (www)     → 7 = Read + Write + Execute
+Others          → 5 = Read + Execute
+```
+Folder bisa dibaca dan ditulis oleh SSH user maupun web server (`www`). Orang lain hanya bisa masuk ke folder, tidak bisa mengubah isinya.
+
+**File (664):**
+```
+Owner (sshUser) → 6 = Read + Write
+Group (www)     → 6 = Read + Write
+Others          → 4 = Read saja
+```
+File bisa dibaca dan ditulis oleh SSH user maupun web server. Orang lain hanya bisa membaca.
+
+---
+
+### Layer 3 — Storage & Cache: `sshUser:www 775`
+```
+Owner (sshUser) → 7 = Read + Write + Execute
+Group (www)     → 7 = Read + Write + Execute
+Others          → 5 = Read + Execute
+```
+Direktori `storage/` dan `bootstrap/cache/` butuh permission tulis oleh web server karena Laravel menyimpan file log, cache view, dan session di sini. Tanpa permission ini Laravel akan error.
+
+---
+
+### Khusus .env: `sshUser:www 640`
+```
+Owner (sshUser) → 6 = Read + Write
+Group (www)     → 4 = Read saja
+Others          → 0 = Tidak ada akses sama sekali
+```
+File `.env` berisi password database dan APP_KEY yang sangat sensitif. Web server hanya perlu membacanya, tidak perlu menulis. Orang lain tidak boleh mengakses sama sekali.
+
+---
+
+## Ringkasan
+
+| Target | Permission | Artinya |
+|---|---|---|
+| Direktori root | 755 | SSH user bisa ubah, semua bisa masuk |
+| Folder project | 775 | SSH user & web server bisa ubah |
+| File project | 664 | SSH user & web server bisa tulis, others hanya baca |
+| storage/ & cache/ | 775 | Web server harus bisa tulis untuk Laravel |
+| .env | 640 | Hanya SSH user & web server yang bisa baca, others diblokir total |
 ### Provisioning Nginx dan Systemd per Project
 *Provisioning* Nginx dan *Systemd* per *project* adalah proses pembangunan infrastruktur server secara otomatis untuk setiap *project* yang didaftarkan pada platform, meliputi pembuatan konfigurasi Nginx sebagai pengatur lalu lintas akses menuju aplikasi yang sesuai dan pembuatan file *systemd service* sebagai pengelola *lifecycle* aplikasi, sehingga setiap *project* memiliki konfigurasi layanan yang terpisah dan independen dalam satu server yang sama.
 
