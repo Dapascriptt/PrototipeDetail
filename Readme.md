@@ -93,9 +93,12 @@ ingress:
   - hostname: project-b.akhzafachrozy.my.id
     service: http://localhost:8002
   - service: http_status:404
+  - hostname: "*.akhzafachrozy.my.id"
+    service: http://localhost:80
 ```
 
-**Ingress** adalah daftar aturan routing yang memberitahu Cloudflare Tunnel ke mana harus meneruskan request yang masuk. Setiap baris berisi `hostname` (domain yang dituju pengguna) dan `service` (port lokal tempat aplikasi berjalan di server). Baris terakhir tanpa `hostname` adalah fallback — request yang tidak cocok dikembalikan 404.
+**Ingress** adalah daftar aturan routing yang memberitahu Cloudflare Tunnel ke mana harus meneruskan request yang masuk. Setiap baris berisi hostname (domain yang dituju pengguna) dan service (alamat lokal tujuan request di server). Baris terakhir tanpa hostname adalah fallback — request yang tidak cocok dikembalikan 404.
+Semua service mengarah ke localhost:80 karena Cloudflare Tunnel cukup meneruskan semua request ke Nginx, lalu Nginx yang membaca hostname dan mengarahkan ke port aplikasi yang sesuai.
 
 Pada platform ini, ingress ditambahkan otomatis oleh `index.php` via Cloudflare API setiap kali ada project baru dideploy, sehingga tidak perlu edit manual.
 
