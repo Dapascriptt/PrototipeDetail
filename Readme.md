@@ -22,11 +22,14 @@ Mahasiswa push kode ke GitHub
 [Detect & Validate]
   ✓ Generate slug nama repo
   ✓ Deteksi Laravel / PHP Native
+  ✓ Set deploy mode (full/update)
   ✓ PHP Syntax Check — kalau error, stop di sini
          ↓
 [Package & Deploy]
   ✓ Buat ZIP (exclude .env, vendor, storage)
   ✓ Kirim ZIP ke index.php via HTTP POST
+  ✓ Terima response dari index.php
+  ✓ Parse kredensial SSH dari response
          ↓
 [index.php di server STB]
   ✓ Autentikasi request dari GitHub Actions
@@ -120,6 +123,241 @@ Sehingga setelah deployment selesai, domain langsung aktif tanpa konfigurasi man
 
 `deploy.yml` mengimplementasikan konsep CI/CD. Penelitian terdahulu umumnya menyebut tahapan ini sebagai *build, testing, dan deploy*. Pada platform ini, konsep tersebut diadaptasi menjadi tiga tahapan yang lebih spesifik sesuai kebutuhan, yaitu **Detect & Validate**, **Package & Deploy**, dan **Notification**.
 
+---
+
+### Anatomi File deploy.yml — Istilah Penting
+
+Sebelum membahas isi per bagian, penting untuk memahami istilah-istilah yang ada di dalam file YAML GitHub Actions:
+
+---
+
+**`name:`**
+Nama dari workflow, job, atau step. Berfungsi sebagai label yang tampil di UI GitHub Actions agar mudah dibaca.
+
+```yaml
+name: AutoDeploy          # nama workflow keseluruhan
+name: Detect and Validate # nama sebuah job
+name: Checkout            # nama sebuah step
+```
+
+---
+
+**`on:`**
+Menentukan **kapan** workflow ini dijalankan (trigger). Bisa dipicu oleh event seperti `push`, `pull_request`, atau manual (`workflow_dispatch`).
+
+```yaml
+on:
+  push:
+    branches:
+      - main
+```
+
+---
+
+**`jobs:`**
+Kumpulan pekerjaan yang akan dijalankan. Satu workflow bisa punya banyak job. Setiap job berjalan di mesin (runner) yang terpisah.
+
+```yaml
+jobs:
+  detect:   # job pertama
+  deploy:   # job kedua
+  notify:   # job ketiga
+```
+
+---
+
+**`runs-on:`**
+Menentukan di mesin mana job ini dijalankan. `ubuntu-latest` artinya pakai mesin Ubuntu terbaru yang disediakan GitHub secara gratis.
+
+```yaml
+runs-on: ubuntu-latest
+```
+
+---
+
+**`steps:`**
+Daftar langkah-langkah di dalam sebuah job. Dijalankan berurutan dari atas ke bawah. Kalau satu step gagal, step berikutnya tidak jalan (kecuali dikonfigurasi lain).
+
+```yaml
+steps:
+  - name: Checkout
+    uses: actions/checkout@v4
+  - name: Detect Framework
+    run: |
+      echo "deteksi framework..."
+```
+
+---
+
+**`id:`**
+Identitas unik sebuah step. Digunakan untuk merujuk output dari step tersebut di tempat lain.
+
+```yaml
+- name: Detect Framework
+  id: detect        # <-- id ini
+  run: |
+    echo "app_type=laravel" >> "$GITHUB_OUTPUT"
+
+# Lalu di tempat lain bisa dipanggil:
+${{ steps.detect.outputs.app_type }}
+```
+
+---
+
+**`uses:`**
+Menggunakan action yang sudah dibuat orang lain (dari GitHub Marketplace). Contoh paling umum adalah `actions/checkout@v4` untuk clone repositori.
+
+```yaml
+- name: Checkout
+  uses: actions/checkout@v4
+```
+
+---
+
+**`run:`**
+Menjalankan perintah shell (bash) secara langsung. Tanda `|` artinya multi-baris.
+
+```yaml
+- name: PHP Syntax Check
+  run: |
+    find . -name "*.php" -exec php -l {} \;
+    echo "Syntax OK"
+```
+
+---
+
+**`env:`**
+Variabel environment yang tersedia di dalam job atau step. Bisa berisi nilai statis maupun hasil dari output sebelumnya.
+
+```yaml
+env:
+  REPO_SLUG: ${{ needs.detect.outputs.repo_slug }}
+  DEPLOY_URL: https://deployv2.akhzafachrozy.my.id
+```
+
+---
+
+**`outputs:`**
+Nilai yang "diekspor" dari sebuah job agar bisa dipakai oleh job lain. Karena setiap job jalan di mesin terpisah, data tidak bisa langsung dibagi — harus lewat outputs.
+
+```yaml
+jobs:
+  detect:
+    outputs:
+      app_type: ${{ steps.detect.outputs.app_type }}
+      repo_slug: ${{ steps.slug.outputs.repo_slug }}
+```
+
+Artinya: simpan hasil dari step `detect` (field `app_type`) sebagai output job bernama `app_type`, agar bisa diakses job lain dengan `${{ needs.detect.outputs.app_type }}`.
+
+---
+
+**`needs:`**
+Menentukan bahwa job ini harus menunggu job lain selesai dulu sebelum jalan. Sekaligus memberi akses ke outputs dari job yang ditunggu.
+
+```yaml
+deploy:
+  needs: detect   # tunggu job detect selesai dulu
+```
+
+---
+
+**`if:`**
+Kondisi yang menentukan apakah job atau step ini dijalankan atau dilewati.
+
+```yaml
+notify:
+  if: always()    # selalu jalan meskipun job sebelumnya gagal
+```
+
+---
+
+**`${{ ... }}`**
+Sintaks ekspresi GitHub Actions untuk mengakses variabel, konteks, atau output.
+
+```yaml
+${{ github.event.repository.name }}   # nama repositori
+${{ steps.detect.outputs.app_type }}  # output dari step detect
+${{ needs.detect.outputs.repo_slug }} # output dari job detect
+${{ inputs.mode }}                    # input dari workflow_dispatch
+${{ github.event_name }}              # nama event pemicu (push/workflow_dispatch)
+${{ github.ref_name }}                # nama branch yang dipush
+```
+
+---
+
+**`with:`**
+Parameter tambahan yang diberikan ke sebuah `uses` action.
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+```
+
+---
+
+**`concurrency:`**
+Mengatur agar hanya satu workflow yang berjalan pada satu waktu untuk grup yang sama. Mencegah dua deployment berjalan bersamaan di branch yang sama.
+
+```yaml
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false   # jangan batalkan yang sedang jalan
+```
+
+---
+
+**`workflow_dispatch:`**
+Trigger khusus yang memungkinkan workflow dijalankan secara manual dari UI GitHub, dengan opsi input dari pengguna.
+
+```yaml
+workflow_dispatch:
+  inputs:
+    mode:
+      description: 'Mode deploy'
+      required: true
+      default: 'full'
+      type: choice
+      options:
+        - full
+        - update
+```
+
+---
+
+**`>> "$GITHUB_OUTPUT"`**
+Cara menyimpan nilai ke output GitHub Actions dari dalam script bash, agar bisa diakses oleh step atau job lain.
+
+```bash
+echo "app_type=laravel" >> "$GITHUB_OUTPUT"
+# Setelah ini bisa diakses dengan: ${{ steps.[id].outputs.app_type }}
+```
+
+---
+
+**`>> "$GITHUB_ENV"`**
+Cara menyimpan nilai ke environment variable GitHub Actions, agar tersedia di semua step berikutnya dalam job yang sama.
+
+```bash
+echo "zip_size=$(du -sh deploy.zip | cut -f1)" >> "$GITHUB_ENV"
+# Setelah ini bisa diakses dengan: ${{ env.zip_size }}
+```
+
+---
+
+**`>> "$GITHUB_STEP_SUMMARY"`**
+Cara menulis konten ke halaman Job Summary di GitHub Actions. Mendukung format Markdown.
+
+```bash
+cat >> "$GITHUB_STEP_SUMMARY" << EOF
+# Hasil Deployment
+| Domain | ${{ env.P_DOMAIN }} |
+EOF
+```
+
+---
+
 ### Trigger — Kapan Workflow Jalan?
 
 ```yaml
@@ -157,33 +395,58 @@ SLUG=$(echo "${{ github.event.repository.name }}" \
   | sed 's/[^a-z0-9-]/-/g' \
   | sed 's/--*/-/g' \
   | sed 's/^-//;s/-$//')
+echo "repo_slug=$SLUG" >> "$GITHUB_OUTPUT"
 ```
 
-Mengubah nama repo menjadi format aman untuk subdomain dan direktori. `Proyek_TA_Daffa` → `proyek-ta-daffa`. Prosesnya: huruf kapital → kecil, karakter non-alfanumerik → tanda hubung, tanda hubung ganda → satu, hapus tanda hubung di awal/akhir.
+Mengubah nama repo menjadi format aman untuk subdomain dan direktori. Prosesnya berlapis:
+
+| Perintah | Fungsi | Contoh |
+|---|---|---|
+| `tr '[:upper:]' '[:lower:]'` | Huruf kapital → kecil | `Proyek_TA` → `proyek_ta` |
+| `sed 's/[^a-z0-9-]/-/g'` | Karakter selain huruf/angka/strip → tanda hubung | `proyek_ta daffa!` → `proyek-ta-daffa-` |
+| `sed 's/--*/-/g'` | Tanda hubung ganda → satu | `proyek--ta` → `proyek-ta` |
+| `sed 's/^-//;s/-$//'` | Hapus tanda hubung di awal/akhir | `proyek-ta-` → `proyek-ta` |
+
+Hasil akhir disimpan ke `$GITHUB_OUTPUT` dengan nama `repo_slug` agar bisa dipakai job berikutnya.
+
+---
 
 **Detect Framework**
 
 ```bash
 if [[ -f "artisan" && -f "composer.json" ]]; then
-  echo "app_type=laravel"
+  echo "app_type=laravel" >> "$GITHUB_OUTPUT"
 else
-  echo "app_type=php-native"
+  echo "app_type=php-native" >> "$GITHUB_OUTPUT"
 fi
 ```
 
-Mendeteksi apakah project Laravel atau PHP Native berdasarkan keberadaan file `artisan` dan `composer.json`. Hasil deteksi disimpan sebagai output yang bisa digunakan job berikutnya.
+Mendeteksi apakah project Laravel atau PHP Native berdasarkan keberadaan file `artisan` dan `composer.json`. Hasil disimpan ke output dengan id step `detect`, lalu diteruskan sebagai output job `detect`.
+
+---
 
 **Set Deploy Mode**
 
 ```bash
 if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-  echo "deploy_mode=${{ inputs.mode }}"
+  echo "deploy_mode=${{ inputs.mode }}" >> "$GITHUB_OUTPUT"
 else
-  echo "deploy_mode=full"
+  echo "deploy_mode=full" >> "$GITHUB_OUTPUT"
 fi
 ```
 
-Jika workflow dipicu manual lewat UI GitHub, gunakan mode yang dipilih pengguna. Jika dipicu otomatis oleh push, selalu gunakan mode `full`.
+Logikanya sederhana:
+- Kalau workflow dijalankan **manual** lewat UI GitHub (`workflow_dispatch`) → pakai mode yang dipilih pengguna (`full` atau `update`)
+- Kalau workflow dijalankan **otomatis** karena push → selalu pakai `full`
+
+Perbedaan `full` vs `update`:
+
+| Mode | Artinya |
+|---|---|
+| `full` | Deploy dari awal, kirim semua file |
+| `update` | Hanya sinkronisasi file yang berubah via rsync, lebih cepat |
+
+---
 
 **PHP Syntax Check**
 
@@ -191,11 +454,36 @@ Jika workflow dipicu manual lewat UI GitHub, gunakan mode yang dipilih pengguna.
 find . -name "*.php" ! -path "./vendor/*" -exec php -l {} \;
 ```
 
-Memeriksa semua file PHP apakah ada syntax error. Kalau ada error, workflow berhenti di sini dan tidak lanjut ke deployment. Inilah inti dari **Continuous Integration** — kode yang salah tidak boleh sampai ke server.
+Memeriksa semua file PHP (kecuali `vendor/`) apakah ada syntax error. Kalau ada error, workflow berhenti di sini dan tidak lanjut ke deployment. Inilah inti dari **Continuous Integration** — kode yang salah tidak boleh sampai ke server.
+
+---
+
+**Output Job detect**
+
+```yaml
+outputs:
+  app_type: ${{ steps.detect.outputs.app_type }}
+  repo_slug: ${{ steps.slug.outputs.repo_slug }}
+  deploy_mode: ${{ steps.mode.outputs.deploy_mode }}
+```
+
+Ketiga nilai ini "diekspor" dari job `detect` agar bisa dibaca oleh job `deploy` menggunakan `${{ needs.detect.outputs.xxx }}`. Ini diperlukan karena setiap job berjalan di mesin terpisah — tidak bisa langsung berbagi variabel.
 
 ---
 
 ### Job 2: Package & Deploy
+
+Job ini baru jalan setelah job `detect` selesai (`needs: detect`). Nilai dari outputs job `detect` langsung dimasukkan ke `env` agar mudah dipakai di semua step.
+
+```yaml
+env:
+  REPO_SLUG: ${{ needs.detect.outputs.repo_slug }}
+  APP_TYPE: ${{ needs.detect.outputs.app_type }}
+  DEPLOY_MODE: ${{ needs.detect.outputs.deploy_mode }}
+  DEPLOY_URL: https://deployv2.akhzafachrozy.my.id
+```
+
+---
 
 **Create Deployment Package**
 
@@ -211,7 +499,12 @@ find . \
   | zip deploy.zip -@ -q
 ```
 
-Mengemas project ke ZIP dengan mengecualikan file yang tidak perlu dikirim ke server. `vendor/` dan `node_modules/` tidak dikirim karena bisa diinstall ulang di server. `.env` tidak dikirim karena berisi konfigurasi yang berbeda antara lokal dan server.
+Mengemas project ke ZIP dengan mengecualikan file yang tidak perlu dikirim ke server:
+- `vendor/` dan `node_modules/` → bisa diinstall ulang di server
+- `.env` → konfigurasi berbeda antara lokal dan server
+- `.git/` dan `.github/` → riwayat git tidak perlu dikirim
+
+---
 
 **Send Deployment Package**
 
@@ -225,30 +518,62 @@ RESPONSE=$(curl -s -X POST \
   "$DEPLOY_URL")
 ```
 
-Mengirim ZIP ke `index.php` di server STB menggunakan HTTP POST. Parameter `key` digunakan untuk autentikasi, `repo` untuk nama project, `mode` untuk menentukan full atau update deployment.
+Mengirim ZIP ke `index.php` di server STB menggunakan HTTP POST via `curl`. Parameter yang dikirim:
+- `key` → autentikasi agar server tahu request ini sah dari GitHub Actions
+- `repo` → nama project (slug)
+- `mode` → full atau update
+- `file` → file ZIP-nya
 
-**Parse & Verifikasi Response**
+Seluruh response dari `index.php` disimpan ke variabel `RESPONSE`.
+
+---
+
+**Verifikasi Response**
 
 ```bash
 if echo "$RESPONSE" | grep -q "AUTODEPLOY_START"; then
-  echo "status=success"
+  echo "status=success" >> "$GITHUB_ENV"
 else
-  echo "status=failed"
+  echo "status=failed" >> "$GITHUB_ENV"
+  echo "::error::Server returned error: $RESPONSE"
   exit 1
 fi
 ```
 
-Mengecek apakah server berhasil memproses. Jika respons mengandung `AUTODEPLOY_START`, berarti sukses. Kemudian informasi seperti domain, port, SSH user dan password di-parse dari respons untuk ditampilkan di summary.
+Mengecek apakah server berhasil memproses. Jika response mengandung `AUTODEPLOY_START`, berarti sukses. Kalau tidak ada, workflow gagal dan berhenti.
+
+---
 
 **Parse Deployment Results**
 
 ```bash
-echo "P_DOMAIN=$(echo "$RAW_RESPONSE" | grep '^ADPL:domain=' | cut -d'=' -f2-)"
-echo "P_SSH_USER=$(echo "$RAW_RESPONSE" | grep '^ADPL:ssh_user=' | cut -d'=' -f2-)"
-echo "P_SSH_PASS=$(echo "$RAW_RESPONSE" | grep '^ADPL:ssh_pass=' | cut -d'=' -f2-)"
+echo "P_DOMAIN=$(echo "$RAW_RESPONSE" | grep '^ADPL:domain=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+echo "P_SSH_USER=$(echo "$RAW_RESPONSE" | grep '^ADPL:ssh_user=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+echo "P_SSH_PASS=$(echo "$RAW_RESPONSE" | grep '^ADPL:ssh_pass=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+echo "P_PORT=$(echo "$RAW_RESPONSE" | grep '^ADPL:port=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
+echo "P_SRV_STATUS=$(echo "$RAW_RESPONSE" | grep '^ADPL:srv_status=' | cut -d'=' -f2-)" >> "$GITHUB_ENV"
 ```
 
-Mengambil informasi spesifik dari respons server dengan format `ADPL:key=value`. Diambil domain, port, SSH user, SSH password, SSH command, nama service, status web, dan status server.
+Mengambil informasi spesifik dari response `index.php`. Response menggunakan format `ADPL:key=value`, lalu di-parse baris per baris menggunakan `grep` dan `cut`, kemudian disimpan ke environment variable GitHub Actions agar bisa ditampilkan di Job Summary.
+
+---
+
+**Deployment Summary**
+
+```bash
+cat >> "$GITHUB_STEP_SUMMARY" << EOF
+# AutoDeploy — $REPO_SLUG
+
+| Info | Detail |
+| :--- | :--- |
+| **Status Deploy** | $STATUS_LABEL |
+| **Domain** | ${{ env.P_DOMAIN }} |
+| **SSH User** | ${{ env.P_SSH_USER }} |
+| **SSH Password** | ${{ env.P_SSH_PASS }} |
+EOF
+```
+
+Menulis tabel Markdown ke halaman Job Summary GitHub Actions. Inilah yang mahasiswa lihat setelah deployment selesai — berisi domain, SSH user, SSH password, dan informasi lainnya.
 
 ---
 
@@ -256,11 +581,17 @@ Mengambil informasi spesifik dari respons server dengan format `ADPL:key=value`.
 
 ```yaml
 notify:
+  name: Notification
+  runs-on: ubuntu-latest
   needs: [detect, deploy]
   if: always()
+  steps:
+    - name: Print Final Status
+      run: |
+        echo "Deployment for ${{ needs.detect.outputs.repo_slug }} finished with status: ${{ needs.deploy.result }}"
 ```
 
-Selalu berjalan meskipun job sebelumnya gagal (`if: always()`). Menampilkan status akhir deployment termasuk domain, kredensial SSH, dan panduan langkah selanjutnya di Job Summary GitHub Actions.
+`if: always()` memastikan job ini selalu berjalan meskipun job `deploy` gagal. Berguna untuk menampilkan status akhir deployment. `needs.deploy.result` berisi `success`, `failure`, atau `cancelled`.
 
 ---
 
@@ -268,7 +599,7 @@ Selalu berjalan meskipun job sebelumnya gagal (`if: always()`). Menampilkan stat
 
 ### Fungsi Utama
 
-`index.php` adalah komponen sisi server yang menerima ZIP dari GitHub Actions dan secara otomatis membangun seluruh infrastruktur untuk setiap project.
+`index.php` adalah komponen sisi server yang menerima ZIP dari GitHub Actions, memproses seluruh infrastruktur, lalu **mengirim balik response** berisi kredensial SSH dan status deployment ke GitHub Actions.
 
 ---
 
@@ -563,9 +894,9 @@ Pada deploy pertama, DNS dan tunnel ingress dikonfigurasi otomatis via API. Pada
 
 ---
 
-### Output Response
+### Output Response ke GitHub Actions
 
-Response yang dikirim ke GitHub Actions menggunakan format terstruktur:
+Response yang dikirim balik ke GitHub Actions menggunakan format terstruktur:
 
 ```
 AUTODEPLOY_START
@@ -577,7 +908,22 @@ ADPL:srv_status=waiting-setup
 AUTODEPLOY_END
 ```
 
-Format `ADPL:key=value` ini yang di-parse oleh step `Parse Deployment Results` di `deploy.yml` untuk ditampilkan sebagai tabel di Job Summary.
+Format `ADPL:key=value` ini yang di-parse oleh step `Parse Deployment Results` di `deploy.yml` menggunakan `grep` dan `cut`, lalu disimpan ke `$GITHUB_ENV` untuk ditampilkan sebagai tabel di Job Summary.
+
+**Alur lengkap response:**
+```
+index.php selesai proses
+      ↓
+Kirim teks ADPL:xxx ke GitHub Actions (lewat HTTP response)
+      ↓
+GitHub Actions simpan ke $GITHUB_ENV (RAW_RESPONSE)
+      ↓
+Step "Parse Deployment Results" ekstrak tiap nilai
+      ↓
+Step "Deployment Summary" tulis ke $GITHUB_STEP_SUMMARY
+      ↓
+Mahasiswa buka Job Summary → lihat tabel kredensial
+```
 
 ---
 
